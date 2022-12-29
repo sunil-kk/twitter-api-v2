@@ -223,7 +223,7 @@ abstract class MediaService {
   /// - https://developer.twitter.com/en/docs/twitter-api/v1/media/upload-media/api-reference/post-media-upload-finalize
   /// - https://developer.twitter.com/en/docs/twitter-api/v1/media/upload-media/api-reference/get-media-upload-status
   
-  Future<TwitterResponse<UploadedMediaData, void>> uploadImageBytes({
+  Future<TwitterResponse<UploadedMediaData, void>> uploadImageBinary({
     required Uint8List image,
     MediaCategory category = MediaCategory.tweet,
     String? altText,
