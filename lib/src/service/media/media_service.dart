@@ -406,7 +406,7 @@ class _MediaService extends BaseMediaService implements MediaService {
 
     return super.transformUploadedDataResponse(
       await _uploadImageBinary(
-        image: image,
+        mediaBytes: image,
         category: category,
         mimeType: mimeType,
         altText: altText,
