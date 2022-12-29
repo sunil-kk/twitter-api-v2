@@ -223,7 +223,7 @@ abstract class MediaService {
   /// - https://developer.twitter.com/en/docs/twitter-api/v1/media/upload-media/api-reference/post-media-upload-finalize
   /// - https://developer.twitter.com/en/docs/twitter-api/v1/media/upload-media/api-reference/get-media-upload-status
   
-  Future<TwitterResponse<UploadedMediaData, void>> uploadMedia({
+  Future<TwitterResponse<UploadedMediaData, void>> uploadImageBytes({
     required Uint8List image,
     MediaCategory category = MediaCategory.tweet,
     String? altText,
@@ -394,7 +394,7 @@ class _MediaService extends BaseMediaService implements MediaService {
   }
   
   @override
-  Future<TwitterResponse<UploadedMediaData, void>> uploadMedia({
+  Future<TwitterResponse<UploadedMediaData, void>> uploadImageBinary({
     required Uint8List image,
     MediaCategory category = MediaCategory.tweet,
     String? altText,
@@ -405,7 +405,7 @@ class _MediaService extends BaseMediaService implements MediaService {
     final mimeType = 'image/png';
 
     return super.transformUploadedDataResponse(
-      await _uploadMedia(
+      await _uploadImageBinary(
         image: image,
         category: category,
         mimeType: mimeType,
@@ -519,7 +519,7 @@ class _MediaService extends BaseMediaService implements MediaService {
     );
   }
   
-  Future<Response> _uploadMedia({
+  Future<Response> _uploadImageBinary({
     required Uint8List mediaBytes,
     required MediaCategory category,
     required String mimeType,
@@ -563,7 +563,7 @@ class _MediaService extends BaseMediaService implements MediaService {
 
     await _appendChunkedUploadMedia(mediaBytes, mediaId);
 
-    await _pollUploadStatus(
+    await _pollBinaryUploadStatus(
       await _finalizeUpload(mediaId: mediaId),
       onProgress,
       onFailed,
@@ -743,7 +743,7 @@ class _MediaService extends BaseMediaService implements MediaService {
         },
       );
   
-  Future<Map<String, dynamic>> _pollUploadStatus(
+  Future<Map<String, dynamic>> _pollBinaryUploadStatus(
     final Response finalizedResponse,
     final Function(UploadEvent event)? onProgress,
     final Function(UploadError error)? onFailed,
@@ -769,7 +769,7 @@ class _MediaService extends BaseMediaService implements MediaService {
       }
 
       if (processingInfo['state'] == 'pending') {
-        final uploadedResponse = await _waitForUploadCompletion(
+        final uploadedResponse = await _waitForBinaryUploadCompletion(
           mediaId: finalizedJson['media_id_string'],
           delaySeconds: processingInfo['check_after_secs'],
           onProgress: onProgress,
@@ -842,7 +842,7 @@ class _MediaService extends BaseMediaService implements MediaService {
     );
   }
   
-    Future<Response> _waitForUploadCompletion({
+  Future<Response> _waitForBinaryUploadCompletion({
     required String mediaId,
     required int delaySeconds,
     required Function(UploadEvent event)? onProgress,
@@ -875,7 +875,7 @@ class _MediaService extends BaseMediaService implements MediaService {
           ),
         );
 
-        return _waitForUploadCompletion(
+        return _waitForBinaryUploadCompletion(
           mediaId: mediaId,
           delaySeconds: processingInfo['check_after_secs'],
           onProgress: onProgress,
