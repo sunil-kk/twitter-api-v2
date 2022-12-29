@@ -158,6 +158,79 @@ abstract class MediaService {
     Function(UploadEvent event)? onProgress,
     Function(UploadError error)? onFailed,
   });
+  
+  /// The integrated endpoint for uploading images.
+  ///
+  /// This endpoint allows large files to be uploaded, divided into the
+  /// appropriate size and securely uploaded to Twitter. If the size of the file
+  /// to be uploaded is large, it may take some time for the upload to
+  /// complete, but this method internally polls for any waiting if it's
+  /// required, and the caller of this method does not need to be aware of the
+  /// status of the upload.
+  ///
+  /// If an error occurs when uploading media, [TwitterUploadException] is
+  /// always thrown.
+  ///
+  /// ## Caution
+  ///
+  /// This method uses the v1.1 endpoint. Therefore, the arguments and returned
+  /// object of this method may change in the future when the v2.0 endpoint for
+  /// uploading images is released.
+  ///
+  /// ## Parameters
+  ///
+  /// - [image]: The raw binary image content being uploaded.
+  ///
+  /// - [category]: Specify whether the media to be uploaded is related to
+  ///               tweets or direct messages. The default value is
+  ///               [MediaCategory.tweet], and this option is not necessary
+  ///               if you are uploading media to be attached to a tweet.
+  ///               However, for media to be attached to a direct message,
+  ///               be sure to specify [MediaCategory.directMessage] for this
+  ///               option.
+  ///
+  /// - [altText]: Additional descriptive text to be added to images and GIFs.
+  ///              Currently, this option is available only for images and GIFs;
+  ///              if the media file being uploaded is a video, this option
+  ///              will be ignored at runtime. Also, the text must be <= 1000
+  ///              chars.
+  ///
+  /// - [additionalOwners]: A list of user IDs to set as additional owners
+  ///                       allowed to use the returned media id in Tweets or
+  ///                       Cards. Up to 100 additional owners may be specified.
+  ///
+  /// - [onProgress]: This callback function allows the user to check the
+  ///                 progress of an upload when a large volume of media is
+  ///                 uploaded. This callback function is called each time after
+  ///                 polling the Twitter upload server. If the upload fails,
+  ///                 this callback function is not called.
+  ///
+  /// - [onFailed]: This callback function is called when the progress of
+  ///               a media upload is polled and the media upload has failed.
+  ///
+  /// ## Endpoint Url
+  ///
+  /// - https://upload.twitter.com/1.1/media/upload.json
+  ///
+  /// ## Authentication Methods
+  ///
+  /// - OAuth 1.0a
+  ///
+  /// ## Reference
+  ///
+  /// - https://developer.twitter.com/en/docs/twitter-api/v1/media/upload-media/api-reference/post-media-upload-init
+  /// - https://developer.twitter.com/en/docs/twitter-api/v1/media/upload-media/api-reference/post-media-upload-append
+  /// - https://developer.twitter.com/en/docs/twitter-api/v1/media/upload-media/api-reference/post-media-upload-finalize
+  /// - https://developer.twitter.com/en/docs/twitter-api/v1/media/upload-media/api-reference/get-media-upload-status
+  
+  Future<TwitterResponse<UploadedMediaData, void>> uploadMedia({
+    required Uint8List image,
+    MediaCategory category = MediaCategory.tweet,
+    String? altText,
+    List<String>? additionalOwners,
+    Function(UploadEvent event)? onProgress,
+    Function(UploadError error)? onFailed,
+  });
 
   /// Use this endpoint to associate uploaded subtitle to an uploaded video.
   ///
@@ -319,6 +392,31 @@ class _MediaService extends BaseMediaService implements MediaService {
       dataBuilder: UploadedMediaData.fromJson,
     );
   }
+  
+  @override
+  Future<TwitterResponse<UploadedMediaData, void>> uploadMedia({
+    required Uint8List image,
+    MediaCategory category = MediaCategory.tweet,
+    String? altText,
+    List<String>? additionalOwners,
+    Function(UploadEvent event)? onProgress,
+    Function(UploadError error)? onFailed,
+  }) async {
+    final mimeType = 'image/png';
+
+    return super.transformUploadedDataResponse(
+      await _uploadMedia(
+        image: image,
+        category: category,
+        mimeType: mimeType,
+        altText: altText,
+        additionalOwners: additionalOwners,
+        onProgress: onProgress,
+        onFailed: onFailed,
+      ),
+      dataBuilder: UploadedMediaData.fromJson,
+    );
+  }
 
   @override
   Future<TwitterResponse<bool, void>> createSubtitle({
@@ -419,6 +517,71 @@ class _MediaService extends BaseMediaService implements MediaService {
         'additional_owners': additionalOwners,
       },
     );
+  }
+  
+  Future<Response> _uploadMedia({
+    required Uint8List mediaBytes,
+    required MediaCategory category,
+    required String mimeType,
+    String? altText,
+    List<String>? additionalOwners,
+    Function(UploadEvent event)? onProgress,
+    Function(UploadError error)? onFailed,
+  }) async {
+  
+    if (mediaBytes.isEmpty) {
+      throw ArgumentError('Cannot upload because the file size is 0.');
+    }
+
+    if (altText != null && altText.length > 1000) {
+      throw ArgumentError.value(
+        altText.length,
+        'altText.length',
+        'Alt text must be <= 1000 chars.',
+      );
+    }
+
+    if ((altText?.isNotEmpty ?? false) && !mimeType.startsWith('image')) {
+      throw UnsupportedError(
+        'Alt text is supported on images or GIF images only.',
+      );
+    }
+
+    final initResponse = await _initUpload(
+      mediaBytes: mediaBytes,
+      category: category,
+      mediaMimeType: mimeType,
+      additionalOwners: additionalOwners,
+    );
+
+    final initJson = tryJsonDecode(initResponse, initResponse.body);
+    final mediaId = initJson['media_id_string'];
+
+    await onProgress?.call(
+      UploadEventExtension.ofPreparing(),
+    );
+
+    await _appendChunkedUploadMedia(mediaBytes, mediaId);
+
+    await _pollUploadStatus(
+      await _finalizeUpload(mediaId: mediaId),
+      onProgress,
+      onFailed,
+    );
+
+    if (altText?.isNotEmpty ?? false) {
+      //! Only supports for Images and GIFs.
+      await _createMetaData(
+        mediaId: mediaId,
+        altText: altText!,
+      );
+    }
+
+    await onProgress?.call(
+      UploadEventExtension.ofCompleted(),
+    );
+
+    return initResponse;
   }
 
   Future<Response> _uploadMedia({
@@ -579,6 +742,53 @@ class _MediaService extends BaseMediaService implements MediaService {
           }
         },
       );
+  
+  Future<Map<String, dynamic>> _pollUploadStatus(
+    final Response finalizedResponse,
+    final Function(UploadEvent event)? onProgress,
+    final Function(UploadError error)? onFailed,
+  ) async {
+    final finalizedJson = tryJsonDecode(
+      finalizedResponse,
+      finalizedResponse.body,
+    );
+    final processingInfo = finalizedJson['processing_info'];
+
+    //! Field set only if polling is required.
+    if (processingInfo != null) {
+      if (processingInfo['state'] == 'failed') {
+        await onFailed?.call(
+          UploadError.fromJson(
+            processingInfo['error'],
+          ),
+        );
+
+        throw Exception(
+          'The media file is in an invalid format.'
+        );
+      }
+
+      if (processingInfo['state'] == 'pending') {
+        final uploadedResponse = await _waitForUploadCompletion(
+          mediaId: finalizedJson['media_id_string'],
+          delaySeconds: processingInfo['check_after_secs'],
+          onProgress: onProgress,
+          onFailed: onFailed,
+        );
+
+        return tryJsonDecode(
+          uploadedResponse,
+          uploadedResponse.body,
+        );
+      }
+    }
+
+    //! The upload is completed when finalized is called.
+    return tryJsonDecode(
+      finalizedResponse,
+      finalizedResponse.body,
+    );
+  }
 
   Future<Map<String, dynamic>> _pollUploadStatus(
     final Response finalizedResponse,
@@ -630,6 +840,51 @@ class _MediaService extends BaseMediaService implements MediaService {
       finalizedResponse,
       finalizedResponse.body,
     );
+  }
+  
+    Future<Response> _waitForUploadCompletion({
+    required String mediaId,
+    required int delaySeconds,
+    required Function(UploadEvent event)? onProgress,
+    required Function(UploadError error)? onFailed,
+  }) async {
+    await Future<void>.delayed(Duration(seconds: delaySeconds));
+
+    final response = await _lookupUploadStatus(mediaId: mediaId);
+    final status = tryJsonDecode(response, response.body);
+
+    final processingInfo = status['processing_info'];
+
+    if (processingInfo != null) {
+      if (processingInfo['state'] == 'failed') {
+        await onFailed?.call(
+          UploadError.fromJson(
+            processingInfo['error'],
+          ),
+        );
+
+        throw Exception(
+          'The media file is in an invalid format.'
+        );
+      }
+
+      if (processingInfo['state'] == 'in_progress') {
+        await onProgress?.call(
+          UploadEventExtension.ofInProgress(
+            processingInfo['progress_percent'],
+          ),
+        );
+
+        return _waitForUploadCompletion(
+          mediaId: mediaId,
+          delaySeconds: processingInfo['check_after_secs'],
+          onProgress: onProgress,
+          onFailed: onFailed,
+        );
+      }
+    }
+
+    return response;
   }
 
   Future<Response> _waitForUploadCompletion({
